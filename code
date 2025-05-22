@@ -1,0 +1,117 @@
+import folium
+import requests
+from geopy.geocoders import Nominatim
+import os
+import webbrowser
+from flask import Flask, request, render_template
+
+app = Flask(__name__, template_folder="frontend", static_folder="static")
+
+# 🔑 Your TomTom API Key
+API_KEY = "TOMTOM-API"
+
+# 🔁 Get real traffic lights from OpenStreetMap (via Overpass API)
+def get_traffic_light_nodes(lat, lon, radius=2000):
+    overpass_url = "http://overpass-api.de/api/interpreter"
+    query = f"""
+    [out:json];
+    node
+      ["highway"="traffic_signals"]
+      (around:{radius},{lat},{lon});
+    out;
+    """
+    response = requests.get(overpass_url, params={'data': query})
+    if response.status_code == 200:
+        data = response.json()
+        traffic_lights = [(el['lat'], el['lon']) for el in data['elements']]
+        return traffic_lights
+    else:
+        print("❌ Overpass API error:", response.status_code)
+        return []
+
+# 🔄 Get traffic flow from TomTom API
+def get_traffic_flow(lat, lng):
+    url = "https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json"
+    params = {
+        "point": f"{lat},{lng}",
+        "unit": "KMPH",
+        "key": API_KEY
+    }
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        data = response.json().get("flowSegmentData", {})
+        current_speed = data.get("currentSpeed", 0)
+        free_flow_speed = data.get("freeFlowSpeed", 1)
+        congestion = current_speed / free_flow_speed if free_flow_speed else 0
+        return current_speed, free_flow_speed, congestion
+    else:
+        print(f"❌ Traffic API error at {lat}, {lng}")
+        return None, None, None
+
+# 🚦 Choose light based on congestion
+def get_light_status(congestion):
+    if congestion > 0.8:
+        return "🟢 Green - Go", "green"
+    elif congestion > 0.5:
+        return "🟡 Yellow - Slow", "orange"
+    else:
+        return "🔴 Red - Stop", "red"
+
+# 🗺️ Build traffic map using real traffic light positions
+def create_real_traffic_light_map(city):
+    geolocator = Nominatim(user_agent="location_app")
+    location = geolocator.geocode(city)
+
+    if not location:
+        print("❌ Location not found.")
+        return None
+
+    center_lat, center_lng = location.latitude, location.longitude
+    traffic_map = folium.Map(location=[center_lat, center_lng], zoom_start=14)
+
+    print("📡 Getting real traffic light points...")
+    lights = get_traffic_light_nodes(center_lat, center_lng)
+
+    if not lights:
+        print("⚠️ No traffic lights found in this area.")
+        return None
+
+    for i, (lat, lng) in enumerate(lights[:10]):  # Limit to 10 points
+        current_speed, free_flow_speed, congestion = get_traffic_flow(lat, lng)
+        if current_speed is not None:
+            light_text, color = get_light_status(congestion)
+            tooltip = (
+                f"🚦 Traffic Light {i+1}\n"
+                f"Speed: {current_speed:.1f} / {free_flow_speed:.1f} km/h\n"
+                f"Congestion: {congestion:.2f}\n"
+                f"{light_text}"
+            )
+            folium.CircleMarker(
+                location=[lat, lng],
+                radius=10,
+                color=color,
+                fill=True,
+                fill_opacity=0.8,
+                tooltip=tooltip
+            ).add_to(traffic_map)
+
+    filename = "static/traffic_map.html"
+    traffic_map.save(filename)
+    print(f"✅ Map saved as '{filename}'")
+    return filename
+
+# 🔄 Flask route to handle traffic map requests
+@app.route('/traffic', methods=['GET', 'POST'])
+def traffic():
+    map_file = None
+    
+    if request.method == 'POST':
+        city = request.form.get('city_name')  # Get city name from HTML form
+        if city:
+            map_file = create_real_traffic_light_map(city)
+    
+    return render_template("traffic.html", map_file=map_file)
+
+# Run Flask App 🚀
+if __name__ == '__main__':
+    app.run(debug=True)
