@@ -46,11 +46,12 @@ def get_traffic_flow(lat, lng):
 # 🚦 Determine traffic light color based on congestion level
 def get_light_status(congestion):
     if congestion > 0.8:
-        return "🟢 Green - Go", "green"
-    elif congestion > 0.5:
-        return "🟡 Yellow - Slow", "orange"
-    else:
         return "🔴 Red - Stop", "red"
+    elif congestion > 0.5:
+        return "🟡 Yellow - Slow", "yellow"
+    else:
+        return "🟢 Green - Go", "green"
+
 
 # 🗺️ Generate map with real traffic lights and traffic conditions
 def create_real_traffic_light_map(city):
